@@ -65,7 +65,7 @@ lev()
 #define Upcase(x) ((isalpha(x) && islower(x))? toupper(x) : (x))
 #define Lowcase(x) ((isalpha(x) && isupper(x))? tolower(x) : (x))
 
-enum e_com {READ, PC, HELP, QUIT, LEV , LOGIC};
+enum e_com {READ, PC, HELP, QUIT, LEV, LOGIC, DFS ,PFS,DAL,PODEM};
 enum e_state {EXEC, CKTLD};         /* Gstate values */
 enum e_ntype {GATE, PI, FB, PO};    /* column 1 of circuit format */
 enum e_gtype {IPT, BRCH, XOR, OR, NOR, NOT, NAND, AND};  /* gate types */
@@ -85,7 +85,12 @@ typedef struct n_struc {
    struct n_struc **unodes;   /* pointer to array of up nodes */
    struct n_struc **dnodes;   /* pointer to array of down nodes */
    int level;                 /* LI:level of the gate output */
-   int val;				  /* LI: vaule of line -1 is unkown */
+   int val;				  /* Li: vaule of line -1 is unkown */
+   struct fList *head;    /* li: for DFS */ 
+   unsigned sa1;
+   unsigned sa0;
+   int pval;
+
 } NSTRUC;                     
 
 /*----------------- new function        ----------------------------------*/
@@ -93,11 +98,12 @@ int calval(int type,int i, int j);
 int getlev(NSTRUC *np);
 void initFArr();
 void setNodelev();
+void setinput(); /* load input into line node */
+void levsim();
 
 
-/*----------------- Command definitions ----------------------------------*/
-#define NUMFUNCS 6
-int cread(), pc(), help(), quit(), lev(), logic();
+#define NUMFUNCS 10
+int cread(), pc(), help(), quit(), lev(), logic(), DFS_client(),PFS_client(),D_client(),podemS();
 struct cmdstruc command[NUMFUNCS] = {
    {"READ", cread, EXEC},
    {"PC", pc, CKTLD},
@@ -105,6 +111,10 @@ struct cmdstruc command[NUMFUNCS] = {
    {"QUIT", quit, EXEC},
    {"LEV", lev, CKTLD},
    {"LOGIC",logic,CKTLD},
+   {"DFS",DFS_client,CKTLD},
+   {"PFS",PFS_client,CKTLD},
+   {"DAL",D_client,CKTLD},
+   {"PODEM",podemS,CKTLD},
 };
 
 /*------------------------------------------------------------------------*/
@@ -124,10 +134,20 @@ int Nbr; 						/* numer of branch */
 int lev_max = 0;                /* max level in circuit */
 int *input;                     /* input */
 NSTRUC **Nodelev;               /* pointer to array of gates sorted by level */
-NSTRUC **Pbrput;				/* pointer to array of branch*/
+//NSTRUC **Pbrput;				/* pointer to array of branch*/
 struct fList *Fchead;	/*collasped list*/
 struct fault *FArr; /*original Farr*/
 struct fault **Fcp;
+
+int snum = 0;
+struct ipList *siphead = NULL;
+int fnum = 0;
+struct ipList *fiphead = NULL;
+
+int psnum = 0;
+int pfnum = 0;
+int dfnum = 0;
+int dsnum = 0;
 
 /*------------------------------------------------------------------------*/
 
@@ -228,11 +248,17 @@ char *cp;
    while(fscanf(fd, "%d %d", &tp, &nd) != EOF) {
       np = &Node[tbl[nd]];
       np->num = nd;
-	  np->level = -1; //LI
-      np->val = 0; //LI
+      /* Li init */
+	  np->level = -1; 
+      np->val = 0;
+	  np->pval = 0;
+      np->head = (struct fList *)malloc(sizeof(struct fList));
+	  np->head->fp = NULL; 
+	  np->head->next = NULL;
+      /* Li init */
       if(tp == PI) Pinput[ni++] = np;
       else if(tp == PO) Poutput[no++] = np;
-	  else if(tp == FB) Pbrput[nb++] = np; /*Li: add branh*/
+	  //else if(tp == FB) Pbrput[nb++] = np; /*Li: add branh*/
 
       switch(tp) {
          case PI:
@@ -310,8 +336,10 @@ char *cp;
    printf("Number of nodes = %d\n", Nnodes);
    printf("Number of primary inputs = %d\n", Npi);
    printf("Number of primary outputs = %d\n", Npo);
-   //printf("Nbr = %d\n",Nbr);
-   /*for(i=0;i<2*(Npi+Nbr);i++){
+   /* L the folloing code print the collapse fault list */
+   /*
+    printf("Nbr = %d\n",Nbr);
+    for(i=0;i<2*(Npi+Nbr);i++){
 		printf("line = %d ; type = %d; lev = %d\n",Fcp[i]->fnum,Fcp[i]->fval, Fcp[i]->Np->level);
 	}//show orginal fault list
 	printf("colla\n");
@@ -367,13 +395,6 @@ description:
   Node.dnodes, Node.flist, Node, Pinput, Poutput, and Tap.
 
 -----------------------------------------------------------------------*/
-
-NSTRUC **Nodelev;               /* pointer to array of gates sorted by level */
-NSTRUC **Pbrput;				/* pointer to array of branch*/
-struct fList *Fchead;	/*collasped list*/
-struct fault *FArr; /*original Farr*/
-struct fault **Fcp;
-
 clear()
 {
    int i;
@@ -381,12 +402,13 @@ clear()
    for(i = 0; i<Nnodes; i++) {
       free(Node[i].unodes);
       free(Node[i].dnodes);
+	  free(Node[i].head);
    }
    free(Node);
    free(Pinput);
    free(Poutput);
    /* Li  free memory*/
-   free(Pbrput);
+   //free(Pbrput);
    free(Fcp);
    free(Nodelev);
    free(FArr);
@@ -413,7 +435,7 @@ allocate()
    Fchead = (struct fList*) malloc(sizeof(struct fList));
    FArr = (struct fault *) malloc(2 * Nnodes * sizeof(struct fault)); /*LI: fault */
    Fcp = (struct fault **) malloc(2 * (Nbr + Npi) * sizeof(struct fault *)); 
-   Pbrput = (NSTRUC **) malloc(Nbr * sizeof(NSTRUC *));
+   //Pbrput = (NSTRUC **) malloc(Nbr * sizeof(NSTRUC *));
    Pinput = (NSTRUC **) malloc(Npi * sizeof(NSTRUC *));
    Poutput = (NSTRUC **) malloc(Npo * sizeof(NSTRUC *));
    for(i = 0; i<Nnodes; i++) {
@@ -495,8 +517,8 @@ description: logic simulation logic()
 author: Li
 -----------------------------------------------------------------------*/
 
-
-void setinput(int i){
+/* give a dec, change to binary and save into input array */
+void DectobinInput(int i){
 	int j,s = 0;
 	for(j = 0;j<Npi;j++){
 		input[j] = i%2;
@@ -504,8 +526,8 @@ void setinput(int i){
 	}
 }
 
-
-void readinput(){
+/* read input array into nodes value */
+void setinput(){
 	int i;
 	for(i = 0;i<Npi;i++){
 		Pinput[i]->val = input[i];
@@ -539,7 +561,7 @@ int calval(int type,int i, int j){
 }
 
 int getval(NSTRUC* n,int lo, int high){
-	if((high-lo+1)== 1){
+	if((high-lo+1)== 1){  // only 1 input for primary gate or this node is primary input
 		return n->unodes[lo]->val;
 	}else{
 		int mid =lo+(high-lo-1)/2;
@@ -564,8 +586,8 @@ logic(){
 	fputs("Primary Inputs: ",fp);
 	fputs("->>>>>>>>>>>\t\t\t\t\tPrimary outputs:\n",fp);	
    	for(j = 0;j<pow(2,Npi)&&j<1000;j++){		
-		setinput(j);
-		readinput();
+		DectobinInput(j);
+		setinput();
 		for(i = Npi-1; i>=0; i--) fputc(Pinput[i]->val+'0',fp);
 		levsim();
 		fputs("\t\t\t\t\t\t\t",fp);	
@@ -582,9 +604,7 @@ called by: user
 description: fault collaspe
 author: Li
 -----------------------------------------------------------------------*/
-/*addFList(struct fList *head, struct fault *new){
-		
-}*/
+
 
 /* 0 is no dom eq, 1 have dom and eq, need delete */
 int checkeq(struct n_struc* ne,int f1,struct n_struc* nc,int f2){
@@ -668,7 +688,7 @@ int check(struct n_struc *nc, int fval){
 						return 1;
 			}				
 	}else if(checkeq(ne,1,nc,fval)){
-		printf("%d  val = 1\n",ne->num);
+		//printf("%d  val = 1\n",ne->num);
 		if(ne->type == 0)	return 1;
 		else 
 			for(i = 0; i<ne->fin;i++){
@@ -701,18 +721,22 @@ void initFArr(){
 	int i,j=0;
 	int nc = 0;
 	FILE *fp = fopen("fault_original.txt","w");
+    /* get orignal fault list , write into file */
 	for(i=0;i<2*Nnodes;i++){
 		FArr[i].fval = j;
 		FArr[i].Np = Nodelev[i/2]; /* use nodelev, the Farr will be sorted by level */
 		FArr[i].fnum = (FArr[i].Np)->num;
+		if(j == 0) FArr[i].Np->sa0 = i;
+		else FArr[i].Np->sa1 = i;
 		j = (j+1)%2;
 		fprintf(fp,"Line: %d, Fault: %d \n",FArr[i].fnum,FArr[i].fval,fp);
+        /* get the collapsed fault by check point theory */
 		if(FArr[i].Np->type == 1 || FArr[i].Np->type == 0) Fcp[nc++]=&FArr[i];
 	}
 	fclose(fp);
     struct fList *br = Fchead;
     struct fList *new;
-    /* store the fcp large to small for gate level */
+    /* store the fcp sorted by gate level large to small order */
 	for(i = 2*(Npi+Nbr)-1;i>=0;i--){
 		new = (struct fList*)malloc(sizeof(struct fList));
 		new->fp = Fcp[i];
@@ -726,9 +750,11 @@ void initFArr(){
 	while(br){
 		//printf("%d %d\n",br->fp->Np->num,br->fp->fval);
 		int flag = 0;
+		/* check dom */
 		if(br->fp->Np->type != 0)
 			if(check(br->fp->Np,br->fp->fval))
 				flag = 1;
+		/* check equal if no dom */
 		if(flag == 0){
 			brr = br->next;
 			while(brr){
@@ -745,6 +771,7 @@ void initFArr(){
 				pre = pre->next;	
 		br = br->next;
 	}
+    /* write file */
 	br = Fchead->next;
 	fp = fopen("fault_collapse.txt","w");
 	while(br){
@@ -752,14 +779,397 @@ void initFArr(){
 		br = br->next;	
 	}
 	fclose(fp);
-	
+	printf("======> fault collapse done, check fault_collapse.txt and fault_original.txt \n");
+}
+
+/*-----------------------------------------------------------------------
+input: None
+output:
+called by: user
+description: DFS
+author: Li
+-----------------------------------------------------------------------*/
+struct fList* copyfList(struct fList *l1){
+	struct fList* head = (struct fList*)malloc(sizeof(struct fList));
+	struct fList* new;
+	struct fList* br = l1->next;
+	struct fList* brr = head;
+	while(br){
+		new = (struct fList*)malloc(sizeof(struct fList));
+		new->fp = br->fp;
+		new->next = NULL;
+		brr->next = new;
+		brr = brr->next;
+		br = br->next;
+	}
+	return head;
+}
+
+void addfList(struct fList* head,struct fault *fp){
+	struct fList* br = head;
+	while(br->next) br = br->next;
+	struct fList* new = (struct fList*)malloc(sizeof(struct fList));
+	br->next = new;
+	new->fp = fp;
+	new->next = NULL;
+}
+
+void mergefList(struct fList* head,struct fList* l1){
+	struct fList* br = head;
+	while(br->next) br = br->next;
+	br->next = copyfList(l1)->next;
+}
+
+int getconval(int type){
+	switch(type){
+		case 3: return 1;
+		case 4: return 1;
+		case 6: return 0;
+		case 7: return 0; 
+	}
+}
+
+int checkconval(struct n_struc *Np, int *num){
+	int i,j = 0;
+	if(Np->type == 1 || Np->type == 2 || Np->type == 5)
+		return 0;
+	int c = getconval(Np->type);
+	for(i = 0; i<Np->fin;i++){
+		if(c == Np->unodes[i]->val){
+			j++;
+			*num = i;
+		}
+	}
+	return j;
+}
+
+struct fList* DFSs(int *Nip)
+{
+	input = Nip;
+    /* get logic sim */
+	setinput();
+	levsim();
+    int i,j;
+    int index;
+    int* num;
+    struct fList* fee;
+	for(i = 0;i<Nnodes;i++){
+		if(Nodelev[i]->head->next){
+			fee = Nodelev[i]->head->next;
+			Nodelev[i]->head->next = NULL;
+			free(fee);
+		}
+			
+	}
+    for(i = 0;i<Nnodes;i++)
+	{
+		//printf("%d\n",Nodelev[i]->val);
+		//printf("%d\n",Nodelev[i]->num);
+		if(Nodelev[i]->val == 0) addfList(Nodelev[i]->head,&FArr[Nodelev[i]->sa1]);
+		else addfList(Nodelev[i]->head,&FArr[Nodelev[i]->sa0]);
+        num = (int*)malloc(sizeof(int));
+		index = checkconval(Nodelev[i],num);
+		if(Nodelev[i]->type != 0)
+		{
+			if(index == 1) mergefList(Nodelev[i]->head,Nodelev[i]->unodes[*num]->head);
+			else if(index == 0)
+				for(j = 0; j<Nodelev[i]->fin;j++)
+					mergefList(Nodelev[i]->head,Nodelev[i]->unodes[j]->head);	
+		}
+	}
+	struct fList* head = (struct fList*) malloc(sizeof(struct fList));
+	head->next = NULL;
+	for(i = 0; i<Npo; i++){
+		mergefList(head,Poutput[i]->head);
+	}
+	free(num);
+	return head;
+}
+
+int DFS_client()
+{
+	/*DectobinInput(0);
+	struct fList* head = DFSs(input);
+	struct fList* br = head->next;
+	while(br){
+		printf("line = %d ; type = %d; lev = %d\n", br->fp->fnum,br->fp->fval, br->fp->Np->level);
+		br = br->next;	
+	}
+	return 0;*/
+	if(siphead == NULL){
+		printf("Do the DAL command first");
+		return 0;
+	}
+    dsnum = dfnum = 0;
+	struct ipList* brr = siphead->next;
+	struct fList* head;
+	struct fList* br;
+	while(brr){
+	 	head = DFSs(brr->Nip);
+	 	br	= head->next;
+		int flag = 0;
+		while(br){
+				if(br->fp == brr->fp) flag = 1;
+				br = br->next;
+		}
+		if(flag == 1){ dsnum++;}
+		else{ //printf("Test vector for line = %d fault %d fail\n",brr->fp->fnum,brr->fp->fval);
+			dfnum++;
+		}
+		brr = brr->next;
+	}
+	printf("----------------------------------------------------\n");
+	printf("Fault coverage  = %0.2f%% \n", (dsnum+0.0)*100/(snum+fnum));
+	printf("Total test vector = %d\nRight test vector = %d\nWrong test vector = %d",snum,dsnum,dfnum);
+
+	return 0;
+}
+
+/*-----------------------------------------------------------------------
+input: None
+output: level
+called by: user
+description: PFS
+author: vinay
+-----------------------------------------------------------------------*/
+/* for print binary */
+void printb(unsigned n){
+	if(!n) printf("0");		
+	while (n) {
+		if (n%2 == 1)
+		    printf("1");
+		else
+		    printf("0");
+
+		n = n/2;
+	}
+	 //printf("\n");
+}
+
+void printmask(unsigned* ormk, unsigned *andmk)
+{
+	int i;	
+	for(i = 0;i<Nnodes;i++)
+    {
+		printf("line %d \n",Node[i].num);
+		printf("andmask = ");
+		printb(andmk[i]);
+		printf("\n");
+		printf("ormask  = ");
+		printb(ormk[i]);
+		printf("\n");
+	}
+}
+
+/*set mask  */
+
+void setbinary(unsigned* mk, int i, int val, int index)
+{
+	if(val == 0)
+		mk[index] = mk[index] - pow(2,i);
+	else 
+		mk[index] = mk[index] + pow(2,i); 
 }
 
 
+void setmask(unsigned* ormk, unsigned *andmk,int lo, int hi)
+{
+	int j;
+	int val, num , index;
+	for(j = lo;j<hi;j++){
+		val = FArr[j].fval;
+		num = FArr[j].fnum;
+		index = FArr[j].Np->indx;
+		if(val == 0) setbinary(andmk,j-lo,val,index);
+		else setbinary(ormk,j-lo,val,index); 
+	}
+}
+
+void resetmask(unsigned* ormk, unsigned *andmk)
+{
+	int i;
+	for(i = 0 ; i<Nnodes; i++)
+    {
+		andmk[i] = 0xFFFFFFFF;
+		ormk[i] = 0x00000000;
+	}
+}
+
+/* cal val */
+void psetinput()
+{
+	int i;
+	for(i = 0;i<Npi;i++)
+	{
+		if(input[i])
+			Pinput[i]->pval = 0xFFFFFFFF;
+		else 
+			Pinput[i]->pval = 0;
+	}
+}
+
+int calpval(int type,unsigned i,unsigned j){
+	switch(type){
+		case 2: return pxor(i,j);
+		case 3: return por(i,j);
+		case 4: return pnor(i,j);
+		case 5: return pnot(i);
+		case 6: return pnand(i,j);
+		case 7: return pand(i,j); 
+	}
+}
+
+int getpval(NSTRUC* n,int lo, int high){
+	if((high-lo+1)== 1){  // only 1 input for primary gate or this node is primary input
+		return n->unodes[lo]->pval;
+	}else{
+		int mid =lo+(high-lo-1)/2;
+		return calpval(n->type,getpval(n,lo,mid),getpval(n,mid+1,high));	
+	}
+}
+
+void parsim(unsigned* ormk, unsigned *andmk){
+	int i,j;
+	int index = 0;
+	for(i = 0; i<Nnodes;i++){
+		index = Nodelev[i]->indx;
+		if(Nodelev[i]->type > 1){
+			Nodelev[i]->pval = getpval(Nodelev[i],0,Nodelev[i]->fin-1); /*get val according the input number*/
+		}else if(Nodelev[i]->type == 1){
+			Nodelev[i]->pval = Nodelev[i]->unodes[0]->pval; 
+		}
+		/*printf("-----------------------\n");
+		printf("andmk = ");
+		printb(andmk[index]);
+		printf("\n");
+		printf("ormk = ");
+		printb(ormk[index]);
+		printf("\n");
+		printf("num: %d value: ",Nodelev[i]->num);		
+		printb(Nodelev[i]->pval);
+		printf("\n");*/
+
+		Nodelev[i]->pval = ((Nodelev[i]->pval)&andmk[index])|ormk[index];
+		
+		/*printf("Nodelev[i]-> num: %d value: ",Nodelev[i]->num);		
+		printb(Nodelev[i]->pval);
+		printf("\n");*/
+	}
+}
+
+void dectobinary(unsigned num,int *res,int lo,int hi){
+	int i;	
+	for(i = lo;i<hi;i++){
+		res[i-lo] = num%2;
+		num = num/2;
+	}
+}
 
 
+struct fList* PFSs(int *Nip)
+{
+	int bit = 32;
+	input = Nip;
+	setinput();
+	levsim();
+	unsigned ormk[Nnodes];
+	unsigned andmk[Nnodes];
+	int i,f,h;
+	int num = (2*Nnodes+bit-1)/bit;
+	int j = 2*Nnodes;
+	struct fList* head = (struct fList*)malloc(sizeof(struct fList));
+	head->next = NULL;
+	head->fp = NULL;
+	for(i = 0; i< num; i++)
+	{
+		/* set mask */		
+		resetmask(ormk, andmk);
+		//printmask(ormk,andmk);
+		if(j >= bit) setmask(ormk,andmk,i*bit,(i+1)*bit);
+		else setmask(ormk,andmk,i*bit,i*bit+j);
+		/* cal mask */
+		psetinput();
+		parsim(ormk,andmk);
+		int res[bit];
+		for(f = 0; f<Npo; f++)
+		{
+			if(j >= bit)
+			{ 
+				dectobinary(Poutput[f]->pval,res,i*bit,(i+1)*bit);
+				for(h = 0;h<bit;h++){
+					if(res[h] != Poutput[f]->val)
+					{
+						 addfList(head,&FArr[h+i*bit]);		
+					}	
+				}
+			}else
+			{ 
+				dectobinary(Poutput[f]->pval,res,i*bit,i*bit+j);
+				for(h = 0;h<j;h++){
+					if(res[h] != Poutput[f]->val)
+						 addfList(head,&FArr[h+i*bit]);		
+				}
+			}
+		}
+		j = j - bit;
+	}
+	/*struct fList* br = head->next;
+	while(br){
+		//printf("line num = %d , type = %d\n", br->fp->fnum,br->fp->fval);
+		br = br->next;
+	}*/
+	return head;
+}
+	
+int PFS_client()
+{
+	/*DectobinInput(12);
+	struct fList* head = PFSs(input);
+	return 0; */
+	if(siphead == NULL){
+		printf("Do the DAL command first");
+		return 0;
+	}
+	struct ipList* brr = siphead->next;
+	struct fList* head;
+	struct fList* br;
+	int flag;
+	psnum = pfnum = 0;
+	while(brr){
+	 	head = PFSs(brr->Nip);
+	 	br	= head->next;
+		flag = 0;
+		while(br){
+			//if(brr->fp->fnum == 1)
+				//printf("line num = %d , type = %d\n", br->fp->fnum,br->fp->fval);
+			if(br->fp == brr->fp) flag = 1;
+			br = br->next;	
+		}
+		if(flag == 1){ psnum++;}
+		else{ 
+			//printf("Test vector for line = %d fault %d fail\n",brr->fp->fnum,brr->fp->fval);
+			pfnum++;
+		}
+		brr = brr->next;
+	}
+	printf("----------------------------------------------------\n");
+	printf("Fault coverage  = %0.2f%%\n", (psnum+0.0)*100/(snum+fnum));
+	printf("Total test vector = %d\nRight test vector = %d\nWrong test vector = %d",snum,psnum,pfnum);
+	return 0;
+}
 
 
+int D_client(){
+   printf("fail\n");
 
+   return 0;
+}
+
+
+int podemS(){
+	printf("fail\n");
+	return 0;
+
+}
 /*========================= End of program ============================*/
 

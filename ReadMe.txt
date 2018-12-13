@@ -5,14 +5,26 @@ Command for run appliction
 	./readckt
 
 COmmand for leveliztion:
-	read x.ckt
-	lev
+	./readckt
+	read c17.ckt
+	pc
 
 Command for logic simulation:
+	./readckt
     logic
 
-// As it is simple logic simulator, just calulation the first 1000 input types if pow(2,Npi) is bigger than 1000. 
+Command for ATPG use D + dfs
+	./readckt
+	read c17.ckt
+	dal
+	dfs
 
+Command for ATPG use D + dfs
+	./readckt
+	read c17.ckt
+	dal
+	pfs
+	
 
 Author:Zhenyu Li
 Group: 7

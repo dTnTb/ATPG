@@ -1,3 +1,8 @@
+/***********************
+Author: zhenyu LI
+Group 7
+************************/
+
 #include <stdio.h>
 #include "prigate.h"
 
@@ -20,4 +25,21 @@ int not(int i){
 	return !i;
 }
 
-
+unsigned por(unsigned i, unsigned j){
+	return i|j;
+}
+unsigned pxor(unsigned i, unsigned j){
+	return i^j;
+}
+unsigned pnor(unsigned i, unsigned j){
+	return ~(i|j);
+}
+unsigned pnand(unsigned i, unsigned j){
+	return ~(i&j);
+}
+unsigned pand(unsigned i, unsigned j){
+	return i&j;
+}
+unsigned pnot(unsigned i){
+	return ~i;
+}

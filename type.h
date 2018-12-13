@@ -1,9 +1,13 @@
+/***********************
+Author: zhenyu LI
+Group 7
+************************/
+
+
 // fault 
 struct fault{
 	int fval; // fault type 0: SA0, 1:SA1
 	int fnum; // line num
-	int Neq;
-	int Ndom;
 	struct n_struc *Np;
 };
 // fault list
